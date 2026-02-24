@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 install pandas matplotlib requests --quiet --break-system-packages 2>&1 | tail -5)",
+      "Bash(python3 -c \"import pandas, matplotlib, requests; print\\('all deps available'\\)\")",
+      "Bash(python3 analyze.py 2>&1)",
+      "Bash(pip install chromadb sentence-transformers streamlit anthropic --break-system-packages -q 2>&1 | tail -5)",
+      "Bash(pip3 install chromadb sentence-transformers streamlit anthropic --break-system-packages -q 2>&1 | tail -10)",
+      "Bash(python3 ingest.py 2>&1)",
+      "Bash(streamlit run chat.py 2>&1)",
+      "Bash(streamlit run /Users/shahar/yc-companies/chat.py 2>&1)"
+    ]
+  }
+}

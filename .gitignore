@@ -1,0 +1,14 @@
+# Generated / large binary files
+chroma_db/
+yc_companies.db
+output/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
