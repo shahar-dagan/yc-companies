@@ -3,18 +3,15 @@ pages/dashboard.py — YC Market Opportunity Dashboard.
 Auto-appears in Streamlit sidebar nav as a second page.
 """
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 import streamlit as st
-from collections import Counter
+import plotly.graph_objects as go
+from collections import Counter, defaultdict
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils import COLORS, apply_dark_theme, get_db_connection, setup_conversations_table
+from utils import get_db_connection, setup_conversations_table
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -23,10 +20,55 @@ st.set_page_config(
     layout="wide",
 )
 
-apply_dark_theme()
+# ── Shadcn zinc-dark theme constants ──────────────────────────────────────────
+BG     = "#09090b"   # zinc-950
+CARD   = "#18181b"   # zinc-900
+BORDER = "#27272a"   # zinc-800
+FG     = "#fafafa"   # zinc-50
+MUTED  = "#a1a1aa"   # zinc-400
+DIM    = "#71717a"   # zinc-500
 
-st.title("📊 YC Market Opportunity Dashboard")
-st.caption("All charts sourced from local SQLite DB. Run `python ingest.py` to refresh data.")
+C_ORANGE = "#f97316"
+C_BLUE   = "#3b82f6"
+C_GREEN  = "#22c55e"
+C_RED    = "#ef4444"
+C_PURPLE = "#a855f7"
+
+BASE_LAYOUT = dict(
+    paper_bgcolor=BG, plot_bgcolor=BG,
+    font=dict(family="Inter, system-ui, sans-serif", color=FG, size=12),
+    margin=dict(l=16, r=16, t=48, b=16),
+    hoverlabel=dict(bgcolor=CARD, bordercolor=BORDER, font=dict(color=FG)),
+    legend=dict(bgcolor=CARD, bordercolor=BORDER, font=dict(color=MUTED)),
+)
+AXIS = dict(gridcolor=BORDER, linecolor=BORDER,
+            tickfont=dict(color=DIM), title_font=dict(color=MUTED),
+            zerolinecolor=BORDER)
+
+
+def make_layout(title, xaxis_title="", yaxis_title="", **kw):
+    layout = dict(**BASE_LAYOUT,
+                  title=dict(text=title, x=0, xanchor="left", font=dict(color=FG)),
+                  xaxis=dict(**AXIS, title=xaxis_title),
+                  yaxis=dict(**AXIS, title=yaxis_title))
+    layout.update(kw)
+    return layout
+
+
+def show(fig):
+    st.plotly_chart(fig, use_container_width=True,
+                    config={"displayModeBar": "hover", "displaylogo": False})
+
+
+# ── Page header with refresh button ───────────────────────────────────────────
+col_title, col_refresh = st.columns([6, 1])
+with col_title:
+    st.title("📊 YC Market Opportunity Dashboard")
+    st.caption("All charts sourced from local SQLite DB. Run `python ingest.py` to refresh data.")
+with col_refresh:
+    if st.button("↻ Refresh", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 # ── DB setup ──────────────────────────────────────────────────────────────────
 conn = get_db_connection()
@@ -127,12 +169,6 @@ def get_batch_sizes() -> list:
     return [(r[0], r[1]) for r in rows]
 
 
-# ── Chart helpers ─────────────────────────────────────────────────────────────
-def show(fig):
-    st.pyplot(fig)
-    plt.close(fig)
-
-
 # ── Load data ─────────────────────────────────────────────────────────────────
 sorted_batches    = get_sorted_batches()
 ind_batch_counts  = get_industry_batch_counts()
@@ -142,7 +178,6 @@ country_stats     = get_country_stats()
 batch_size_raw    = get_batch_sizes()
 
 # Derived: industry totals
-from collections import defaultdict
 ind_totals = defaultdict(int)
 for r in ind_status_rows:
     ind_totals[r["industry"]] += r["total"]
@@ -169,7 +204,6 @@ with col1:
             elif batch in prior4:
                 ind_prior4[ind] += n
 
-        # Only industries present in both periods with ≥5 companies in last4
         momentum = {}
         for ind, n_last in ind_last4.items():
             if n_last < 5:
@@ -186,16 +220,19 @@ with col1:
 
         labels = [x[0] for x in top_mom]
         values = [x[1] for x in top_mom]
-        bar_colors = [COLORS["green"] if v >= 0 else COLORS["red"] for v in values]
+        bar_colors = [C_GREEN if v >= 0 else C_RED for v in values]
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.barh(labels, values, color=bar_colors, alpha=0.85)
-        ax.axvline(0, color=COLORS["muted"], linewidth=1)
-        ax.set_xlabel("% Change")
-        ax.set_title("Industry Momentum (last 4 vs prior 4 batches)")
-        ax.xaxis.grid(True)
-        ax.set_axisbelow(True)
-        fig.tight_layout()
+        fig = go.Figure(go.Bar(
+            x=values, y=labels,
+            orientation="h",
+            marker_color=bar_colors,
+            hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+        ))
+        fig.add_vline(x=0, line_color=MUTED, line_width=1)
+        fig.update_layout(**make_layout(
+            "Industry Momentum (last 4 vs prior 4 batches)",
+            xaxis_title="% Change",
+        ))
         show(fig)
     else:
         st.info("Need at least 8 batches of data for this chart.")
@@ -205,7 +242,6 @@ with col2:
     st.subheader("2. Hiring Heat")
     st.caption("% currently hiring by industry (Active companies, ≥20 total)")
 
-    # Aggregate: active companies by industry
     ind_active_total   = defaultdict(int)
     ind_active_hiring  = defaultdict(int)
     for r in ind_status_rows:
@@ -219,27 +255,24 @@ with col2:
             hire_heat[ind] = ind_active_hiring[ind] / total * 100
 
     hire_sorted = sorted(hire_heat.items(), key=lambda x: x[1])[-20:]
-
     labels = [x[0] for x in hire_sorted]
     values = [x[1] for x in hire_sorted]
 
-    # Gradient from muted to primary
-    norm_vals = [(v - min(values)) / max(1, max(values) - min(values)) for v in values]
-    bar_colors = [
-        (1 - n) * np.array([0.545, 0.580, 0.620]) + n * np.array([1.0, 0.4, 0.0])
-        for n in norm_vals
-    ]
+    min_v = min(values) if values else 0
+    max_v = max(values) if values else 1
+    norm_vals = [(v - min_v) / max(1, max_v - min_v) for v in values]
+    bar_colors = [f"rgba(249,115,22,{0.3 + 0.7 * n:.2f})" for n in norm_vals]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    bars = ax.barh(labels, values, color=bar_colors, alpha=0.9)
-    for bar, v in zip(bars, values):
-        ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
-                f"{v:.0f}%", va="center", fontsize=8)
-    ax.set_xlabel("% Hiring")
-    ax.set_title("Hiring Heat by Industry (Active companies)")
-    ax.xaxis.grid(True)
-    ax.set_axisbelow(True)
-    fig.tight_layout()
+    fig = go.Figure(go.Bar(
+        x=values, y=labels,
+        orientation="h",
+        marker_color=bar_colors,
+        hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(**make_layout(
+        "Hiring Heat by Industry (Active companies)",
+        xaxis_title="% Hiring",
+    ))
     show(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -270,23 +303,25 @@ with col3:
     labels = [x[0] for x in surv_sorted]
     values = [x[1] for x in surv_sorted]
 
-    # Red → green gradient
-    norm_vals = [v / 100 for v in values]
-    bar_colors = [
-        (1 - n) * np.array([0.973, 0.318, 0.286]) + n * np.array([0.247, 0.729, 0.314])
-        for n in norm_vals
-    ]
+    # Red → green gradient via rgba interpolation
+    bar_colors = []
+    for v in values:
+        n = v / 100
+        r = int((1 - n) * 248 + n * 34)
+        g = int((1 - n) * 81  + n * 197)
+        b = int((1 - n) * 73  + n * 94)
+        bar_colors.append(f"rgba({r},{g},{b},0.85)")
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    bars = ax.barh(labels, values, color=bar_colors, alpha=0.9)
-    for bar, v in zip(bars, values):
-        ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
-                f"{v:.0f}%", va="center", fontsize=8)
-    ax.set_xlabel("% Active")
-    ax.set_title("Survival Rates by Industry (% Active)")
-    ax.xaxis.grid(True)
-    ax.set_axisbelow(True)
-    fig.tight_layout()
+    fig = go.Figure(go.Bar(
+        x=values, y=labels,
+        orientation="h",
+        marker_color=bar_colors,
+        hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(**make_layout(
+        "Survival Rates by Industry (% Active)",
+        xaxis_title="% Active",
+    ))
     show(fig)
 
 # ── Chart 4: Emerging Tags ────────────────────────────────────────────────────
@@ -318,7 +353,7 @@ with col4:
         if hist_rate > 0:
             ratio = recent_rate / hist_rate
         else:
-            ratio = recent_rate * 5  # new tag with no history
+            ratio = recent_rate * 5
         emerging[tag] = ratio
 
     top_emerging = sorted(emerging.items(), key=lambda x: x[1], reverse=True)[:15]
@@ -328,16 +363,20 @@ with col4:
         labels = [x[0] for x in top_emerging]
         values = [x[1] for x in top_emerging]
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.barh(labels, values, color=COLORS["blue"], alpha=0.85)
-        ax.axvline(1.0, color=COLORS["muted"], linewidth=1, linestyle="--",
-                   label="baseline (1.0 = no change)")
-        ax.set_xlabel("Recent vs Historical Ratio")
-        ax.set_title(f"Emerging Tags (last {n_recent} batches vs prior)")
-        ax.legend(fontsize=8, framealpha=0.3)
-        ax.xaxis.grid(True)
-        ax.set_axisbelow(True)
-        fig.tight_layout()
+        fig = go.Figure(go.Bar(
+            x=values, y=labels,
+            orientation="h",
+            marker_color=C_BLUE,
+            opacity=0.85,
+            hovertemplate="%{y}: %{x:.2f}x<extra></extra>",
+        ))
+        fig.add_vline(x=1.0, line_color=MUTED, line_width=1,
+                      line_dash="dash", annotation_text="baseline",
+                      annotation_font_color=MUTED)
+        fig.update_layout(**make_layout(
+            f"Emerging Tags (last {n_recent} batches vs prior)",
+            xaxis_title="Recent vs Historical Ratio",
+        ))
         show(fig)
     else:
         st.info("Not enough tag data.")
@@ -362,20 +401,21 @@ with col5:
         totals     = totals[::-1]
         hire_rates = hire_rates[::-1]
 
-        # Alpha = hiring rate (min 0.25 so bars are always visible)
-        alphas = [max(0.25, min(1.0, hr)) for hr in hire_rates]
+        bar_colors = [
+            f"rgba(249,115,22,{max(0.25, min(1.0, hr)):.2f})"
+            for hr in hire_rates
+        ]
 
-        fig, ax = plt.subplots(figsize=(8, 7))
-        for i, (label, val, alpha) in enumerate(zip(countries, totals, alphas)):
-            r, g, b = 1.0, 0.4, 0.0  # primary orange
-            ax.barh(i, val, color=(r, g, b, alpha))
-        ax.set_yticks(range(len(countries)))
-        ax.set_yticklabels(countries, fontsize=8)
-        ax.set_xlabel("Number of Companies")
-        ax.set_title("Top 20 Countries\n(opacity = hiring rate)")
-        ax.xaxis.grid(True)
-        ax.set_axisbelow(True)
-        fig.tight_layout()
+        fig = go.Figure(go.Bar(
+            x=totals, y=countries,
+            orientation="h",
+            marker_color=bar_colors,
+            hovertemplate="%{y}: %{x:,} companies<extra></extra>",
+        ))
+        fig.update_layout(**make_layout(
+            "Top 20 Countries (opacity = hiring rate)",
+            xaxis_title="Number of Companies",
+        ))
         show(fig)
 
 # ── Chart 6: Top Company Density ──────────────────────────────────────────────
@@ -400,16 +440,17 @@ with col6:
     labels = [x[0] for x in dens_sorted]
     values = [x[1] for x in dens_sorted]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    bars = ax.barh(labels, values, color=COLORS["purple"], alpha=0.85)
-    for bar, v in zip(bars, values):
-        ax.text(bar.get_width() + 0.05, bar.get_y() + bar.get_height() / 2,
-                f"{v:.1f}%", va="center", fontsize=8)
-    ax.set_xlabel("% Top Company")
-    ax.set_title("Top Company Density by Industry")
-    ax.xaxis.grid(True)
-    ax.set_axisbelow(True)
-    fig.tight_layout()
+    fig = go.Figure(go.Bar(
+        x=values, y=labels,
+        orientation="h",
+        marker_color=C_PURPLE,
+        opacity=0.85,
+        hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(**make_layout(
+        "Top Company Density by Industry",
+        xaxis_title="% Top Company",
+    ))
     show(fig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -425,20 +466,18 @@ with col7:
     batch_map = {label: n for label, n in batch_size_raw}
     ordered_sizes = [batch_map.get(b, 0) for b in sorted_batches]
 
-    step = max(1, len(sorted_batches) // 20)
-    tick_positions = list(range(0, len(sorted_batches), step))
-    tick_labels    = [sorted_batches[i] for i in tick_positions]
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(range(len(sorted_batches)), ordered_sizes,
-           color=COLORS["primary"], alpha=0.85, width=0.8)
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels, rotation=60, ha="right", fontsize=7)
-    ax.set_ylabel("Companies")
-    ax.set_title("Batch Size Trend")
-    ax.yaxis.grid(True)
-    ax.set_axisbelow(True)
-    fig.tight_layout()
+    fig = go.Figure(go.Bar(
+        x=sorted_batches,
+        y=ordered_sizes,
+        marker_color=C_ORANGE,
+        opacity=0.85,
+        hovertemplate="%{x}: %{y} companies<extra></extra>",
+    ))
+    fig.update_layout(**make_layout(
+        "Batch Size Trend",
+        yaxis_title="Companies",
+        xaxis=dict(**AXIS, tickangle=60, title=""),
+    ))
     show(fig)
 
 # ── Chart 8: Industry × Status Heatmap ───────────────────────────────────────
@@ -448,37 +487,44 @@ with col8:
 
     key_statuses = ["Active", "Acquired", "Inactive", "Public"]
 
-    # Top 10 industries by total company count
     top10_inds = sorted(ind_tot2.items(), key=lambda x: x[1], reverse=True)[:10]
     top10_inds = [x[0] for x in top10_inds if x[0]]
 
-    # Build (industry, status) → count lookup
     ind_status_lookup = defaultdict(lambda: defaultdict(int))
     for r in ind_status_rows:
         ind_status_lookup[r["industry"]][r["status"]] += r["total"]
 
-    # Build matrix
-    matrix = np.zeros((len(top10_inds), len(key_statuses)))
-    for i, ind in enumerate(top10_inds):
+    matrix = []
+    text_matrix = []
+    for ind in top10_inds:
         row_total = sum(ind_status_lookup[ind][s] for s in key_statuses)
-        if row_total > 0:
-            for j, status in enumerate(key_statuses):
-                matrix[i, j] = ind_status_lookup[ind][status] / row_total * 100
+        row = []
+        text_row = []
+        for status in key_statuses:
+            val = ind_status_lookup[ind][status] / row_total * 100 if row_total > 0 else 0
+            row.append(val)
+            text_row.append(f"{val:.0f}%")
+        matrix.append(row)
+        text_matrix.append(text_row)
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=100)
-    ax.set_xticks(range(len(key_statuses)))
-    ax.set_xticklabels(key_statuses)
-    ax.set_yticks(range(len(top10_inds)))
-    ax.set_yticklabels(top10_inds, fontsize=9)
-    for i in range(len(top10_inds)):
-        for j in range(len(key_statuses)):
-            v = matrix[i, j]
-            ax.text(j, i, f"{v:.0f}%", ha="center", va="center",
-                    fontsize=9, color="black" if v > 50 else COLORS["text"])
-    cb = plt.colorbar(im, ax=ax, fraction=0.03)
-    cb.set_label("% of industry", color=COLORS["text"])
-    plt.setp(cb.ax.yaxis.get_ticklabels(), color=COLORS["muted"])
-    ax.set_title("Outcome by Industry (% in each status)")
-    fig.tight_layout()
+    fig = go.Figure(go.Heatmap(
+        z=matrix,
+        x=key_statuses,
+        y=top10_inds,
+        colorscale="YlOrRd",
+        zmin=0, zmax=100,
+        text=text_matrix,
+        texttemplate="%{text}",
+        textfont=dict(color=FG, size=11),
+        hovertemplate="%{y} / %{x}: %{z:.1f}%<extra></extra>",
+        colorbar=dict(
+            title=dict(text="% of industry", font=dict(color=MUTED)),
+            tickfont=dict(color=DIM),
+            bgcolor=CARD,
+            bordercolor=BORDER,
+        ),
+    ))
+    fig.update_layout(**make_layout(
+        "Outcome by Industry (% in each status)",
+    ))
     show(fig)
