@@ -8,8 +8,7 @@ Usage:
 
 import json
 import os
-import sqlite3
-from pathlib import Path
+import uuid
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -19,10 +18,18 @@ import chromadb
 import streamlit as st
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-# ── Config ───────────────────────────────────────────────────────────────────
-DB_PATH    = "yc_companies.db"
-CHROMA_DIR = "./chroma_db"
-MODEL      = "claude-sonnet-4-6"
+from utils import (
+    CHROMA_DIR,
+    check_and_refresh_db,
+    delete_session,
+    get_db_connection,
+    load_session_messages,
+    save_message,
+    setup_conversations_table,
+)
+
+# ── Config ────────────────────────────────────────────────────────────────────
+MODEL = "claude-sonnet-4-6"
 
 EXAMPLE_QUESTIONS = [
     "How many healthcare companies are active?",
@@ -161,13 +168,6 @@ def get_chroma_collection():
 
 
 @st.cache_resource
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-@st.cache_resource
 def get_anthropic_client(api_key: str):
     return anthropic.Anthropic(api_key=api_key)
 
@@ -190,8 +190,7 @@ def search_companies(query: str, n_results: int = 10, where: dict = None) -> dic
     documents = results["documents"][0]
 
     for cid, dist, meta, doc in zip(ids, distances, metadatas, documents):
-        similarity = max(0.0, 1.0 - dist)  # cosine distance → similarity
-        # Build description snippet from document
+        similarity = max(0.0, 1.0 - dist)
         snippet = doc[:300] + "…" if len(doc) > 300 else doc
         companies.append({
             "name":        meta.get("name", ""),
@@ -217,7 +216,6 @@ def search_companies(query: str, n_results: int = 10, where: dict = None) -> dic
 def query_database(sql: str) -> dict:
     sql_stripped = sql.strip()
 
-    # Safety: only allow SELECT
     first_word = sql_stripped.split()[0].upper() if sql_stripped else ""
     if first_word != "SELECT":
         return {"error": "Only SELECT statements are allowed.", "sql": sql}
@@ -238,7 +236,7 @@ def query_database(sql: str) -> dict:
         return {"error": str(e), "sql": sql}
 
 
-# ── Tool dispatcher ──────────────────────────────────────────────────────────
+# ── Tool dispatcher ───────────────────────────────────────────────────────────
 def execute_tool(name: str, inputs: dict) -> str:
     if name == "search_companies":
         result = search_companies(
@@ -259,11 +257,10 @@ def run_agent(messages: list, api_key: str) -> tuple[str, list]:
     """
     Run the Claude agentic loop.
     Returns (final_text, tool_calls_log).
-    tool_calls_log: list of {name, inputs, result_preview}
     """
-    client      = get_anthropic_client(api_key)
-    tool_calls  = []
-    loop_msgs   = list(messages)  # copy so we don't mutate session state yet
+    client     = get_anthropic_client(api_key)
+    tool_calls = []
+    loop_msgs  = list(messages)
 
     while True:
         response = client.messages.create(
@@ -274,12 +271,10 @@ def run_agent(messages: list, api_key: str) -> tuple[str, list]:
             messages=loop_msgs,
         )
 
-        # Collect text + tool use blocks
         assistant_content = response.content
         loop_msgs.append({"role": "assistant", "content": assistant_content})
 
         if response.stop_reason == "end_turn":
-            # Extract final text
             final_text = " ".join(
                 block.text for block in assistant_content
                 if hasattr(block, "text")
@@ -293,14 +288,12 @@ def run_agent(messages: list, api_key: str) -> tuple[str, list]:
                     continue
 
                 result_str = execute_tool(block.name, block.input)
-                result_obj = json.loads(result_str)
 
-                # Log for UI display
                 preview = result_str[:500] + "…" if len(result_str) > 500 else result_str
                 tool_calls.append({
-                    "name":    block.name,
-                    "inputs":  block.input,
-                    "result":  preview,
+                    "name":   block.name,
+                    "inputs": block.input,
+                    "result": preview,
                 })
 
                 tool_results.append({
@@ -327,11 +320,21 @@ st.set_page_config(
     layout="wide",
 )
 
-# Initialize session state
+# ── Session state init ────────────────────────────────────────────────────────
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    _conn = get_db_connection()
+    setup_conversations_table(_conn)
+    st.session_state.messages = load_session_messages(_conn, st.session_state.session_id)
+
 if "pending_input" not in st.session_state:
     st.session_state.pending_input = None
+
+if "refresh_checked" not in st.session_state:
+    st.session_state.refresh_checked = True
+    st.session_state.refresh_in_progress = check_and_refresh_db()
 
 # ── Resolve API key ───────────────────────────────────────────────────────────
 _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -353,9 +356,20 @@ with st.sidebar:
     st.divider()
 
     if st.button("Clear conversation", use_container_width=True):
+        _conn = get_db_connection()
+        delete_session(_conn, st.session_state.session_id)
         st.session_state.messages = []
         st.session_state.pending_input = None
         st.rerun()
+
+    if st.button("New session", use_container_width=True):
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.session_state.pending_input = None
+        st.rerun()
+
+    if st.session_state.get("refresh_in_progress"):
+        st.info("Database refresh running in background…")
 
     st.divider()
     st.caption(
@@ -379,7 +393,6 @@ for msg in st.session_state.messages:
                         st.json(tc["inputs"])
                         st.text(tc["result"])
         else:
-            # user
             content = msg.get("content", "")
             if isinstance(content, str):
                 st.markdown(content)
@@ -388,7 +401,7 @@ for msg in st.session_state.messages:
                     if isinstance(block, dict) and block.get("type") == "text":
                         st.markdown(block["text"])
 
-# Determine user input: chat box or sidebar button
+# Determine user input
 user_input = st.chat_input("Ask anything about YC companies…")
 
 if st.session_state.pending_input and not user_input:
@@ -407,24 +420,25 @@ if user_input:
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # Build messages for API (only role/content pairs)
+    # Build messages for API (role/content pairs only)
     api_messages = []
     for m in st.session_state.messages:
         if m["role"] == "user":
             api_messages.append({"role": "user", "content": m["content"]})
         else:
-            # assistant messages stored as text; reconstruct simple content
             api_messages.append({"role": "assistant", "content": m["text"]})
 
     api_messages.append({"role": "user", "content": user_input})
 
-    # Store user turn
+    # Store and persist user turn
     st.session_state.messages.append({
         "role":    "user",
         "content": user_input,
     })
+    _conn = get_db_connection()
+    save_message(_conn, st.session_state.session_id, "user", user_input)
 
-    # Run agent with spinner
+    # Run agent
     with st.spinner("Thinking…"):
         final_text, tool_calls = run_agent(api_messages, _api_key)
 
@@ -438,9 +452,11 @@ if user_input:
                     st.json(tc["inputs"])
                     st.text(tc["result"])
 
-    # Store assistant turn
+    # Store and persist assistant turn
     st.session_state.messages.append({
         "role":       "assistant",
         "text":       final_text,
         "tool_calls": tool_calls,
     })
+    _conn = get_db_connection()
+    save_message(_conn, st.session_state.session_id, "assistant", final_text, tool_calls)

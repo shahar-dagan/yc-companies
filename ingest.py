@@ -6,7 +6,6 @@ Usage:
     python ingest.py
 """
 
-import json
 import re
 import sqlite3
 from pathlib import Path
@@ -14,15 +13,16 @@ from pathlib import Path
 import requests
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
-# ── Config ──────────────────────────────────────────────────────────────────
-API_URL   = "https://yc-oss.github.io/api/companies/all.json"
-DB_PATH   = "yc_companies.db"
-CHROMA_DIR = "./chroma_db"
+# ── Config ────────────────────────────────────────────────────────────────────
+API_URL    = "https://yc-oss.github.io/api/companies/all.json"
+DB_PATH    = str(Path(__file__).parent / "yc_companies.db")
+CHROMA_DIR = str(Path(__file__).parent / "chroma_db")
 BATCH_SIZE = 100
 
 SEASON_MAP = {"winter": "W", "spring": "S", "summer": "S", "fall": "F"}
 
 
+# ── Helper functions (module-level) ───────────────────────────────────────────
 def parse_batch_label(raw: str) -> str:
     """'Winter 2022' → 'W22'"""
     raw = str(raw).strip().lower()
@@ -65,20 +65,62 @@ def safe_bool_int(v) -> int:
     return 0
 
 
-# ── 1. Fetch data ────────────────────────────────────────────────────────────
-print("Fetching data from API …")
-resp = requests.get(API_URL, timeout=60)
-resp.raise_for_status()
-companies = resp.json()
-print(f"  {len(companies):,} companies loaded")
+def build_document(c: dict) -> str:
+    parts = [
+        safe_str(c.get("name")),
+        safe_str(c.get("one_liner")),
+        safe_str(c.get("long_description")),
+        safe_str(c.get("industry")),
+        safe_str(c.get("subindustry")),
+    ]
+    tags_raw = c.get("tags") or []
+    if isinstance(tags_raw, list):
+        parts.append(", ".join(tags_raw))
+    parts.append(safe_str(c.get("batch")))
+    parts.append(safe_str(c.get("all_locations")))
+    parts.append(safe_str(c.get("status")))
+    return " | ".join(p for p in parts if p)
 
 
-# ── 2. SQLite ────────────────────────────────────────────────────────────────
-print("\nBuilding SQLite database …")
-db = sqlite3.connect(DB_PATH)
-cur = db.cursor()
+def build_metadata(c: dict) -> dict:
+    """All values must be str, int, or float — no None, no list."""
+    tags_raw = c.get("tags") or []
+    tags_str = ", ".join(tags_raw) if isinstance(tags_raw, list) else safe_str(tags_raw)
 
-cur.executescript("""
+    return {
+        "id":            safe_int(c.get("id")),
+        "name":          safe_str(c.get("name")),
+        "batch":         safe_str(c.get("batch")),
+        "batch_label":   parse_batch_label(safe_str(c.get("batch"))),
+        "industry":      safe_str(c.get("industry")),
+        "status":        safe_str(c.get("status")),
+        "is_hiring":     safe_bool_int(c.get("isHiring")),
+        "top_company":   safe_bool_int(c.get("top_company")),
+        "team_size":     safe_int(c.get("team_size")),
+        "country":       extract_country(safe_str(c.get("all_locations"))),
+        "all_locations": safe_str(c.get("all_locations"), max_len=500),
+        "tags":          tags_str,
+        "website":       safe_str(c.get("website")),
+    }
+
+
+# ── Main ingest function ──────────────────────────────────────────────────────
+def run_ingest(db_path: str = DB_PATH, chroma_dir: str = CHROMA_DIR):
+    import chromadb
+
+    # ── 1. Fetch data ─────────────────────────────────────────────────────────
+    print("Fetching data from API …")
+    resp = requests.get(API_URL, timeout=60)
+    resp.raise_for_status()
+    companies = resp.json()
+    print(f"  {len(companies):,} companies loaded")
+
+    # ── 2. SQLite ─────────────────────────────────────────────────────────────
+    print("\nBuilding SQLite database …")
+    db = sqlite3.connect(db_path)
+    cur = db.cursor()
+
+    cur.executescript("""
 DROP TABLE IF EXISTS companies;
 
 CREATE TABLE companies (
@@ -111,122 +153,82 @@ CREATE INDEX IF NOT EXISTS idx_industry    ON companies(industry);
 CREATE INDEX IF NOT EXISTS idx_status      ON companies(status);
 """)
 
-rows = []
-for c in companies:
-    tags_raw   = c.get("tags") or []
-    tags_str   = ", ".join(tags_raw) if isinstance(tags_raw, list) else safe_str(tags_raw)
-    regions_raw = c.get("regions") or []
-    regions_str = ", ".join(regions_raw) if isinstance(regions_raw, list) else safe_str(regions_raw)
+    rows = []
+    for c in companies:
+        tags_raw    = c.get("tags") or []
+        tags_str    = ", ".join(tags_raw) if isinstance(tags_raw, list) else safe_str(tags_raw)
+        regions_raw = c.get("regions") or []
+        regions_str = ", ".join(regions_raw) if isinstance(regions_raw, list) else safe_str(regions_raw)
 
-    rows.append((
-        safe_int(c.get("id")),
-        safe_str(c.get("name")),
-        safe_str(c.get("slug")),
-        safe_str(c.get("batch")),
-        parse_batch_label(safe_str(c.get("batch"))),
-        safe_str(c.get("industry")),
-        safe_str(c.get("subindustry")),
-        safe_str(c.get("status")),
-        safe_int(c.get("team_size")),
-        safe_str(c.get("one_liner")),
-        safe_str(c.get("long_description")),
-        safe_str(c.get("all_locations")),
-        extract_country(safe_str(c.get("all_locations"))),
-        safe_bool_int(c.get("isHiring")),
-        safe_bool_int(c.get("top_company")),
-        safe_bool_int(c.get("nonprofit")),
-        safe_str(c.get("stage")),
-        tags_str,
-        regions_str,
-        safe_int(c.get("launched_at")),
-        safe_str(c.get("website")),
-        safe_str(c.get("url")),
-    ))
+        rows.append((
+            safe_int(c.get("id")),
+            safe_str(c.get("name")),
+            safe_str(c.get("slug")),
+            safe_str(c.get("batch")),
+            parse_batch_label(safe_str(c.get("batch"))),
+            safe_str(c.get("industry")),
+            safe_str(c.get("subindustry")),
+            safe_str(c.get("status")),
+            safe_int(c.get("team_size")),
+            safe_str(c.get("one_liner")),
+            safe_str(c.get("long_description")),
+            safe_str(c.get("all_locations")),
+            extract_country(safe_str(c.get("all_locations"))),
+            safe_bool_int(c.get("isHiring")),
+            safe_bool_int(c.get("top_company")),
+            safe_bool_int(c.get("nonprofit")),
+            safe_str(c.get("stage")),
+            tags_str,
+            regions_str,
+            safe_int(c.get("launched_at")),
+            safe_str(c.get("website")),
+            safe_str(c.get("url")),
+        ))
 
-cur.executemany("""
+    cur.executemany("""
 INSERT OR REPLACE INTO companies VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """, rows)
-db.commit()
-db.close()
-print(f"  SQLite: {len(rows):,} rows written → {DB_PATH}")
+    db.commit()
+    db.close()
+    print(f"  SQLite: {len(rows):,} rows written → {db_path}")
+
+    # ── 3. ChromaDB ───────────────────────────────────────────────────────────
+    print("\nBuilding ChromaDB vector store …")
+    client = chromadb.PersistentClient(path=chroma_dir)
+
+    try:
+        client.delete_collection("yc_companies")
+        print("  Deleted existing 'yc_companies' collection")
+    except Exception:
+        pass
+
+    ef  = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    col = client.create_collection("yc_companies", embedding_function=ef)
+
+    total    = len(companies)
+    inserted = 0
+
+    for start in range(0, total, BATCH_SIZE):
+        batch = companies[start : start + BATCH_SIZE]
+
+        ids       = []
+        documents = []
+        metadatas = []
+
+        for c in batch:
+            cid = str(safe_int(c.get("id")) or hash(safe_str(c.get("slug"))))
+            ids.append(cid)
+            documents.append(build_document(c))
+            metadatas.append(build_metadata(c))
+
+        col.upsert(ids=ids, documents=documents, metadatas=metadatas)
+        inserted += len(batch)
+        pct = inserted / total * 100
+        print(f"  ChromaDB: {inserted:,}/{total:,} ({pct:.0f}%)", end="\r", flush=True)
+
+    print(f"\n  ChromaDB: {inserted:,} documents upserted → {chroma_dir}")
+    print("\nDone! Run:  streamlit run chat.py")
 
 
-# ── 3. ChromaDB ──────────────────────────────────────────────────────────────
-print("\nBuilding ChromaDB vector store …")
-import chromadb
-
-client = chromadb.PersistentClient(path=CHROMA_DIR)
-
-# Delete existing collection to start fresh
-try:
-    client.delete_collection("yc_companies")
-    print("  Deleted existing 'yc_companies' collection")
-except Exception:
-    pass
-
-ef = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-col = client.create_collection("yc_companies", embedding_function=ef)
-
-def build_document(c: dict) -> str:
-    parts = [
-        safe_str(c.get("name")),
-        safe_str(c.get("one_liner")),
-        safe_str(c.get("long_description")),
-        safe_str(c.get("industry")),
-        safe_str(c.get("subindustry")),
-    ]
-    tags_raw = c.get("tags") or []
-    if isinstance(tags_raw, list):
-        parts.append(", ".join(tags_raw))
-    parts.append(safe_str(c.get("batch")))
-    parts.append(safe_str(c.get("all_locations")))
-    parts.append(safe_str(c.get("status")))
-    return " | ".join(p for p in parts if p)
-
-
-def build_metadata(c: dict) -> dict:
-    """All values must be str, int, or float — no None, no list."""
-    tags_raw = c.get("tags") or []
-    tags_str = ", ".join(tags_raw) if isinstance(tags_raw, list) else safe_str(tags_raw)
-
-    return {
-        "id":           safe_int(c.get("id")),
-        "name":         safe_str(c.get("name")),
-        "batch":        safe_str(c.get("batch")),
-        "batch_label":  parse_batch_label(safe_str(c.get("batch"))),
-        "industry":     safe_str(c.get("industry")),
-        "status":       safe_str(c.get("status")),
-        "is_hiring":    safe_bool_int(c.get("isHiring")),
-        "top_company":  safe_bool_int(c.get("top_company")),
-        "team_size":    safe_int(c.get("team_size")),
-        "country":      extract_country(safe_str(c.get("all_locations"))),
-        "all_locations": safe_str(c.get("all_locations"), max_len=500),
-        "tags":         tags_str,
-        "website":      safe_str(c.get("website")),
-    }
-
-
-total = len(companies)
-inserted = 0
-
-for start in range(0, total, BATCH_SIZE):
-    batch = companies[start : start + BATCH_SIZE]
-
-    ids       = []
-    documents = []
-    metadatas = []
-
-    for c in batch:
-        cid = str(safe_int(c.get("id")) or hash(safe_str(c.get("slug"))))
-        ids.append(cid)
-        documents.append(build_document(c))
-        metadatas.append(build_metadata(c))
-
-    col.upsert(ids=ids, documents=documents, metadatas=metadatas)
-    inserted += len(batch)
-    pct = inserted / total * 100
-    print(f"  ChromaDB: {inserted:,}/{total:,} ({pct:.0f}%)", end="\r", flush=True)
-
-print(f"\n  ChromaDB: {inserted:,} documents upserted → {CHROMA_DIR}")
-
-print("\nDone! Run:  streamlit run chat.py")
+if __name__ == "__main__":
+    run_ingest()
