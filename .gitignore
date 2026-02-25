@@ -3,6 +3,9 @@ chroma_db/
 yc_companies.db
 output/
 
+# Environment / secrets
+.env
+
 # macOS
 .DS_Store
 

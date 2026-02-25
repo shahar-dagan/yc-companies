@@ -11,6 +11,9 @@ import os
 import sqlite3
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import anthropic
 import chromadb
 import streamlit as st
@@ -331,7 +334,7 @@ if "pending_input" not in st.session_state:
     st.session_state.pending_input = None
 
 # ── Resolve API key ───────────────────────────────────────────────────────────
-_env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -341,20 +344,6 @@ with st.sidebar:
         "Powered by Claude + hybrid search (vector + SQL)."
     )
     st.divider()
-
-    # API key input (shown only when env var is absent)
-    if _env_key:
-        _api_key = _env_key
-    else:
-        _api_key = st.text_input(
-            "Anthropic API key",
-            type="password",
-            placeholder="sk-ant-...",
-            help="Enter your Anthropic API key. Set ANTHROPIC_API_KEY env var to skip this.",
-        )
-        if not _api_key:
-            st.warning("Enter an API key above to start chatting.")
-        st.divider()
 
     st.subheader("Example questions")
     for q in EXAMPLE_QUESTIONS:
@@ -406,8 +395,11 @@ if st.session_state.pending_input and not user_input:
     user_input = st.session_state.pending_input
     st.session_state.pending_input = None
 
+if not _api_key:
+    st.error("ANTHROPIC_API_KEY not found. Add it to your .env file.")
+    st.stop()
+
 if user_input and not _api_key:
-    st.warning("Please enter your Anthropic API key in the sidebar first.")
     user_input = None
 
 if user_input:
