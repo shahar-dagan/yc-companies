@@ -35,6 +35,37 @@ DONE_SENTINEL = object()
 
 
 # ── Orthogonal CLI wrapper ────────────────────────────────────────────────────
+def _extract_json(text: str) -> dict | list:
+    """
+    Extract the first valid JSON object/array from text.
+    Handles: orth status lines ("- Calling..."), markdown fences,
+    trailing prose after JSON, and { / [ appearing inside URLs before the real JSON.
+    Tries every candidate { / [ position in order until one parses cleanly.
+    """
+    stripped = text.strip()
+
+    # Strip markdown fences: ```json ... ``` or ``` ... ```
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        inner = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        stripped = inner.strip()
+
+    # Sanitise common Claude-generated JSON issues
+    stripped = stripped.replace(": undefined", ": null").replace(":undefined", ":null")
+
+    # Try every { or [ position — stops at the first one that fully parses
+    decoder = json.JSONDecoder()
+    for i, c in enumerate(stripped):
+        if c in "{[":
+            try:
+                obj, _ = decoder.raw_decode(stripped, i)
+                return obj
+            except json.JSONDecodeError:
+                continue
+
+    raise ValueError(f"No valid JSON found in output: {text[:300]}")
+
+
 def _orth(args: list, timeout: int = ORTH_TIMEOUT) -> dict:
     """
     Run `orth run <args>` and return parsed JSON.
@@ -51,10 +82,10 @@ def _orth(args: list, timeout: int = ORTH_TIMEOUT) -> dict:
         out = result.stdout.strip()
         if not out:
             return {"error": "empty response from orth"}
-        return json.loads(out)
+        return _extract_json(out)
     except subprocess.TimeoutExpired:
         return {"error": f"orth command timed out after {timeout}s"}
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, ValueError) as e:
         return {"error": f"JSON parse error: {e}", "raw": result.stdout[:400]}
     except Exception as e:
         return {"error": str(e)}
@@ -297,6 +328,14 @@ Return ONLY a JSON object with this exact structure (no markdown fences):
 
 
 # ── Specialist runners ────────────────────────────────────────────────────────
+def _safe_agent(fn, *args) -> dict:
+    """Run an agent function, returning {"error": ...} if JSON extraction fails."""
+    try:
+        return fn(*args)
+    except (ValueError, json.JSONDecodeError) as e:
+        return {"error": str(e)[:300]}
+
+
 def _news_agent(company: dict, api_key: str) -> dict:
     prompt = (
         f"Research recent news for: {company['name']}\n"
@@ -306,7 +345,7 @@ def _news_agent(company: dict, api_key: str) -> dict:
         "Find news from the past 12 months."
     )
     raw = _run_agent(_NEWS_SYSTEM, prompt, [_EXA_TOOL, _SCRAPE_TOOL], api_key)
-    return json.loads(raw)
+    return _extract_json(raw)
 
 
 def _market_agent(company: dict, api_key: str) -> dict:
@@ -318,7 +357,7 @@ def _market_agent(company: dict, api_key: str) -> dict:
         f"Tags: {company.get('tags', 'N/A')}"
     )
     raw = _run_agent(_MARKET_SYSTEM, prompt, [_EXA_TOOL, _SCRAPE_TOOL], api_key)
-    return json.loads(raw)
+    return _extract_json(raw)
 
 
 def _funding_agent(company: dict, api_key: str) -> dict:
@@ -329,7 +368,7 @@ def _funding_agent(company: dict, api_key: str) -> dict:
         f"Current stage: {company.get('stage', 'N/A')}"
     )
     raw = _run_agent(_FUNDING_SYSTEM, prompt, [_FUNDING_TOOL, _EXA_TOOL], api_key)
-    return json.loads(raw)
+    return _extract_json(raw)
 
 
 def _community_agent(company: dict, api_key: str) -> dict:
@@ -339,7 +378,7 @@ def _community_agent(company: dict, api_key: str) -> dict:
         f"One-liner: {company.get('one_liner', 'N/A')}"
     )
     raw = _run_agent(_COMMUNITY_SYSTEM, prompt, [_EXA_TOOL], api_key)
-    return json.loads(raw)
+    return _extract_json(raw)
 
 
 def _synthesis_agent(
@@ -364,7 +403,7 @@ def _synthesis_agent(
         system=_SYNTHESIS_SYSTEM,
         messages=[{"role": "user", "content": context}],
     )
-    return json.loads(response.content[0].text)
+    return _extract_json(response.content[0].text)
 
 
 # ── Public orchestrator ───────────────────────────────────────────────────────
@@ -401,7 +440,7 @@ def run_research(
     try:
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {
-                pool.submit(fn, company, api_key): name
+                pool.submit(_safe_agent, fn, company, api_key): name
                 for name, fn in agents.items()
             }
             for future in as_completed(futures):
