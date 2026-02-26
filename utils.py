@@ -117,6 +117,68 @@ def delete_session(conn, session_id: str):
     conn.commit()
 
 
+# ── Research table ────────────────────────────────────────────────────────────
+def setup_research_table(conn):
+    """Create company_research table and indexes if they don't exist (idempotent)."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS company_research (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id           TEXT    NOT NULL UNIQUE,
+            company_id       INTEGER NOT NULL,
+            company_name     TEXT    NOT NULL,
+            triggered_at     INTEGER NOT NULL,
+            completed_at     INTEGER,
+            status           TEXT    NOT NULL DEFAULT 'running',
+            news_result      TEXT,
+            market_result    TEXT,
+            funding_result   TEXT,
+            community_result TEXT,
+            synthesis_result TEXT,
+            error_detail     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_company
+            ON company_research(company_id, triggered_at);
+        CREATE INDEX IF NOT EXISTS idx_research_run
+            ON company_research(run_id);
+    """)
+    conn.commit()
+
+
+def insert_research_run(conn, run_id: str, company_id: int, company_name: str) -> None:
+    """Insert a new research run with status='running'."""
+    conn.execute(
+        "INSERT INTO company_research "
+        "(run_id, company_id, company_name, triggered_at, status) "
+        "VALUES (?, ?, ?, ?, 'running')",
+        (run_id, company_id, company_name, int(time.time())),
+    )
+    conn.commit()
+
+
+def get_research_run(conn, run_id: str) -> dict | None:
+    """Fetch a single research run row as a dict."""
+    cur = conn.execute(
+        "SELECT * FROM company_research WHERE run_id = ?", (run_id,)
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    cols = [d[0] for d in cur.description]
+    return dict(zip(cols, row))
+
+
+def list_research_runs(conn, company_id: int, limit: int = 10) -> list:
+    """Return the N most recent runs for a company."""
+    cur = conn.execute(
+        "SELECT run_id, company_name, triggered_at, completed_at, status "
+        "FROM company_research "
+        "WHERE company_id = ? ORDER BY triggered_at DESC LIMIT ?",
+        (company_id, limit),
+    )
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
 # ── Auto-refresh ──────────────────────────────────────────────────────────────
 REFRESH_INTERVAL_DAYS = 7
 
