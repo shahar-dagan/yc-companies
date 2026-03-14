@@ -304,8 +304,7 @@ def run_agent(
                     )
                 break  # success
 
-            except anthropic.RateLimitError as e:
-                last_exc = e
+            except anthropic.RateLimitError:
                 if attempt < 3:
                     wait = 2 ** attempt  # 1, 2, 4 seconds
                     if response_placeholder is not None:
