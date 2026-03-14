@@ -110,17 +110,26 @@ Navigate to **Dashboard** in the sidebar for interactive market charts. Useful f
 ├── utils.py             # Shared helpers (DB, caching, refresh)
 ├── research_agents.py   # Parallel specialist research agents
 ├── pages/
-│   ├── research.py      # Company deep-research page
-│   └── dashboard.py     # Market opportunity dashboard
+│   ├── dashboard.py     # Market opportunity dashboard
+│   ├── analyze.py       # Live YC API analysis charts
+│   └── research.py      # Company deep-research page
+├── .streamlit/
+│   └── config.toml       # Theme and server config
 ├── requirements.txt
 ├── .env.example
-└── CLAUDE.md            # Architecture notes for Claude Code
+├── SECURITY.md           # Security and secrets guidance
+└── CLAUDE.md             # Architecture notes for Claude Code
 ```
 
 ## Screenshots
 
 <!-- Add screenshots here after first deploy -->
 > Screenshots coming soon. Run `streamlit run chat.py` to see the app locally.
+
+## Security
+
+- **Do not commit `.env` or any file containing API keys.** Use `.env.example` as a template; the real `.env` is gitignored.
+- See [SECURITY.md](SECURITY.md) for more detail and for reporting issues.
 
 ## Contributing
 
