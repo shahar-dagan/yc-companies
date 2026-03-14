@@ -3,12 +3,17 @@ utils.py — Shared constants, helpers, and cached resources for YC Companies ap
 """
 
 import json
+import re
 import sqlite3
 import time
 import threading
 from pathlib import Path
 
+import requests
 import streamlit as st
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+MODEL = "claude-sonnet-4-6"
 
 # ── Paths (absolute, so pages/ subdirectory resolves correctly) ───────────────
 _ROOT      = Path(__file__).parent
@@ -28,6 +33,62 @@ COLORS = {
     "blue":    "#58A6FF",
     "purple":  "#D2A8FF",
 }
+
+
+# ── Live YC API fetch (shared by pages/analyze.py) ───────────────────────────
+_YC_API_URL  = "https://yc-oss.github.io/api/companies/all.json"
+_SEASON_MAP  = {"winter": ("W", 0), "spring": ("S", 1), "summer": ("S", 1), "fall": ("F", 2)}
+
+
+def _parse_batch_label(raw: str):
+    m = re.match(r"(\w+)\s+(\d{4})", str(raw).strip().lower())
+    if not m:
+        return None, (9999, 9)
+    letter, order = _SEASON_MAP.get(m.group(1), ("?", 9))
+    return f"{letter}{m.group(2)[2:]}", (int(m.group(2)), order)
+
+
+def _extract_country(loc: str) -> str:
+    if not isinstance(loc, str) or not loc.strip():
+        return ""
+    return loc.split(",")[-1].strip()
+
+
+@st.cache_data(ttl=3600)
+def fetch_yc_data() -> tuple[list[dict], list[str]]:
+    """
+    Fetch and normalise live data from the YC OSS API.
+    Returns (companies, sorted_batch_labels).
+    Tags are always a list[str]; is_hiring / top_company / nonprofit are bool.
+    Cached for 1 hour.
+    """
+    resp = requests.get(_YC_API_URL, timeout=30)
+    resp.raise_for_status()
+
+    companies = []
+    batch_sort: dict[str, tuple] = {}
+    for c in resp.json():
+        label, sort_key = _parse_batch_label(c.get("batch", ""))
+        if not label or label.startswith("?"):
+            continue
+        tags = c.get("tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",") if t.strip()]
+        companies.append({
+            "batch_label": label,
+            "status":      c.get("status") or "Unknown",
+            "industry":    c.get("industry") or "Unknown",
+            "team_size":   c.get("team_size"),
+            "is_hiring":   bool(c.get("isHiring") or c.get("is_hiring") or False),
+            "top_company": bool(c.get("top_company") or False),
+            "nonprofit":   bool(c.get("nonprofit") or False),
+            "tags":        tags,
+            "country":     _extract_country(c.get("all_locations", "")),
+        })
+        batch_sort[label] = sort_key
+
+    sorted_batches = sorted(batch_sort, key=lambda b: batch_sort[b])
+    return companies, sorted_batches
 
 
 def apply_dark_theme():
@@ -170,7 +231,7 @@ def get_research_run(conn, run_id: str) -> dict | None:
 def list_research_runs(conn, company_id: int, limit: int = 10) -> list:
     """Return the N most recent runs for a company."""
     cur = conn.execute(
-        "SELECT run_id, company_name, triggered_at, completed_at, status "
+        "SELECT run_id, company_name, triggered_at, completed_at, status, error_detail "
         "FROM company_research "
         "WHERE company_id = ? ORDER BY triggered_at DESC LIMIT ?",
         (company_id, limit),

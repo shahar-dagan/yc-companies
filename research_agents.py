@@ -25,8 +25,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import anthropic
 
+from utils import MODEL
+
 # ── Constants ─────────────────────────────────────────────────────────────────
-MODEL      = "claude-sonnet-4-6"
 MAX_TOKENS = 2048
 ORTH_TIMEOUT = 45   # seconds per orth CLI call
 
@@ -113,7 +114,7 @@ def _tool_nyne_funding(company_name: str) -> dict:
     start = _orth([
         "-X", "POST", "nyne", "/company/funding",
         "-b", json.dumps({"company_name": company_name}),
-    ])
+    ], timeout=10)
     if "error" in start:
         return start
 
@@ -128,7 +129,7 @@ def _tool_nyne_funding(company_name: str) -> dict:
     # Poll up to ~45s
     for _ in range(15):
         time.sleep(3)
-        result = _orth(["nyne", f"/company/funding/{job_id}"])
+        result = _orth(["nyne", f"/company/funding/{job_id}"], timeout=8)
         status = result.get("status", "")
         if status in ("completed", "done", "success") or "rounds" in result or "funding" in result:
             return result
@@ -208,6 +209,20 @@ def _dispatch(name: str, inputs: dict) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+# ── Retry helper ─────────────────────────────────────────────────────────────
+def _create_with_retry(client, **kwargs):
+    """Call client.messages.create() with exponential backoff on rate-limit errors."""
+    last_exc = None
+    for attempt in range(4):
+        try:
+            return client.messages.create(**kwargs)
+        except anthropic.RateLimitError as e:
+            last_exc = e
+            if attempt < 3:
+                time.sleep(2 ** attempt)  # 1, 2, 4 seconds
+    raise last_exc
+
+
 # ── Generic agentic loop ──────────────────────────────────────────────────────
 def _run_agent(system: str, user: str, tools: list, api_key: str) -> str:
     """
@@ -218,7 +233,8 @@ def _run_agent(system: str, user: str, tools: list, api_key: str) -> str:
     messages = [{"role": "user", "content": user}]
 
     while True:
-        response = client.messages.create(
+        response = _create_with_retry(
+            client,
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=system,
@@ -397,7 +413,8 @@ def _synthesis_agent(
         "community": community,
     }, indent=2)
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
+    response = _create_with_retry(
+        client,
         model=MODEL,
         max_tokens=1024,
         system=_SYNTHESIS_SYSTEM,

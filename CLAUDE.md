@@ -68,3 +68,5 @@ country      TEXT   -- parsed from last segment of all_locations
 
 Tag queries: `tags LIKE '%B2B%'`
 Percentage queries: `CAST(SUM(is_hiring) AS FLOAT) / COUNT(*) * 100`
+
+**Tags format discrepancy:** SQLite stores `tags` as a comma-separated `TEXT` string (from ingest.py). The live YC OSS API returns `tags` as a JSON array (`list[str]`). `fetch_yc_data()` in `utils.py` always normalises to `list[str]`. Never assume they match without converting.

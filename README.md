@@ -5,6 +5,7 @@ An AI-powered platform to explore, analyze, and research Y Combinator companies.
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Streamlit](https://img.shields.io/badge/built%20with-Streamlit-red)
+[![Deploy to Streamlit Cloud](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
 
 ## Features
 
@@ -115,6 +116,11 @@ Navigate to **Dashboard** in the sidebar for interactive market charts. Useful f
 ├── .env.example
 └── CLAUDE.md            # Architecture notes for Claude Code
 ```
+
+## Screenshots
+
+<!-- Add screenshots here after first deploy -->
+> Screenshots coming soon. Run `streamlit run chat.py` to see the app locally.
 
 ## Contributing
 

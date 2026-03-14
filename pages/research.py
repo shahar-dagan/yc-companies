@@ -234,12 +234,101 @@ if display_run_id:
             col_c.metric("Confidence", synthesis_data.get("confidence", "").upper())
             col_r.info(synthesis_data.get("rationale", ""))
 
+        # Build and offer download report
+        def _build_report_md(company, synthesis_data, news_data, market_data, funding_data, community_data):
+            lines = [f"# Research Report: {company['name']}", ""]
+            lines += [f"**Batch:** {company.get('batch_label','')}  |  **Industry:** {company.get('industry','')}  |  **Status:** {company.get('status','')}", ""]
+
+            lines += ["## Synthesis", ""]
+            if synthesis_data.get("error"):
+                lines.append(f"> Agent failed: {synthesis_data['error']}")
+            else:
+                lines.append(synthesis_data.get("executive_summary", ""))
+                lines += ["", f"**Verdict:** {synthesis_data.get('verdict','').replace('_',' ').upper()}  |  **Confidence:** {synthesis_data.get('confidence','').upper()}", ""]
+                lines.append(synthesis_data.get("rationale", ""))
+                if synthesis_data.get("opportunities"):
+                    lines += ["", "**Opportunities**"]
+                    lines += [f"- {o}" for o in synthesis_data["opportunities"]]
+                if synthesis_data.get("risks"):
+                    lines += ["", "**Risks**"]
+                    lines += [f"- {r}" for r in synthesis_data["risks"]]
+
+            lines += ["", "## News", ""]
+            if news_data.get("error"):
+                lines.append(f"> Agent failed: {news_data['error']}")
+            else:
+                lines.append(news_data.get("summary", ""))
+                for src in news_data.get("sources", []):
+                    date_str = f" · {src.get('date','')}" if src.get("date") else ""
+                    lines.append(f"- [{src.get('title','Untitled')}]({src.get('url','#')}){date_str}  \n  {src.get('snippet','')}")
+
+            lines += ["", "## Market & Competition", ""]
+            if market_data.get("error"):
+                lines.append(f"> Agent failed: {market_data['error']}")
+            else:
+                lines.append(market_data.get("summary", ""))
+                if market_data.get("market_size"):
+                    lines.append(f"\n**Market Size:** {market_data['market_size']}")
+                if market_data.get("competitors"):
+                    lines += ["", "**Competitors**"]
+                    for c in market_data["competitors"]:
+                        lines.append(f"- **[{c.get('name','')}]({c.get('url','#')})** — {c.get('differentiation','')}")
+                if market_data.get("trends"):
+                    lines += ["", "**Trends**"]
+                    lines += [f"- {t}" for t in market_data["trends"]]
+
+            lines += ["", "## Funding", ""]
+            if funding_data.get("error"):
+                lines.append(f"> Agent failed: {funding_data['error']}")
+            else:
+                lines.append(funding_data.get("summary", ""))
+                lines.append(f"\n**Total Raised:** {funding_data.get('total_raised','Unknown')}  |  **Stage:** {funding_data.get('stage','Unknown')}")
+                if funding_data.get("rounds"):
+                    lines += ["", "**Rounds**"]
+                    for r in funding_data["rounds"]:
+                        parts = [r.get("round_type",""), r.get("date",""), r.get("amount","")]
+                        line = " · ".join(p for p in parts if p)
+                        if r.get("lead_investor"):
+                            line += f"  (Lead: {r['lead_investor']})"
+                        lines.append(f"- {line}")
+                if funding_data.get("investors"):
+                    lines.append("\n**Investors:** " + ", ".join(funding_data["investors"]))
+
+            lines += ["", "## Community Sentiment", ""]
+            if community_data.get("error"):
+                lines.append(f"> Agent failed: {community_data['error']}")
+            else:
+                lines.append(community_data.get("summary", ""))
+                lines.append(f"\n**Overall Sentiment:** {community_data.get('overall_sentiment','neutral').upper()}")
+                for p in community_data.get("posts", []):
+                    icon = {"positive": "✅", "negative": "❌", "neutral": "◻️"}.get(p.get("sentiment","neutral"), "◻️")
+                    lines.append(f"{icon} **{p.get('source','')}** — [{p.get('text','')[:160]}]({p.get('url','#')})")
+
+            return "\n".join(lines)
+
+        report_md = _build_report_md(company, synthesis_data, news_data, market_data, funding_data, community_data)
+        st.download_button(
+            label="⬇ Download report",
+            data=report_md,
+            file_name=f"{company['name'].replace(' ', '_')}_research.md",
+            mime="text/markdown",
+        )
+
         tab_syn, tab_news, tab_market, tab_funding, tab_community = st.tabs(
             ["🧠 Synthesis", "📰 News", "📊 Market", "💰 Funding", "💬 Community"]
         )
 
         with tab_syn:
             st.subheader("Executive Summary")
+            failed_agents = [
+                name for name, data in [
+                    ("news", news_data), ("market", market_data),
+                    ("funding", funding_data), ("community", community_data),
+                ]
+                if data.get("error")
+            ]
+            if failed_agents:
+                st.warning(f"Note: {', '.join(failed_agents)} agent(s) failed — synthesis may be incomplete.")
             st.write(synthesis_data.get("executive_summary", "No synthesis available."))
             c1, c2 = st.columns(2)
             with c1:
@@ -353,3 +442,5 @@ else:
         if st.button(label, key=f"hist_{pr['run_id']}", use_container_width=False):
             st.session_state["display_run_id"] = pr["run_id"]
             st.rerun()
+        if pr["status"] == "error" and pr.get("error_detail"):
+            st.caption(f"Error: {pr['error_detail'][:120]}")

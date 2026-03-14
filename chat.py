@@ -8,6 +8,7 @@ Usage:
 
 import json
 import os
+import time
 import uuid
 
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 
 from utils import (
     CHROMA_DIR,
+    MODEL,
     check_and_refresh_db,
     delete_session,
     get_db_connection,
@@ -27,9 +29,6 @@ from utils import (
     save_message,
     setup_conversations_table,
 )
-
-# ── Config ────────────────────────────────────────────────────────────────────
-MODEL = "claude-sonnet-4-6"
 
 EXAMPLE_QUESTIONS = [
     "How many healthcare companies are active?",
@@ -253,64 +252,124 @@ def execute_tool(name: str, inputs: dict) -> str:
 
 
 # ── Agentic loop ──────────────────────────────────────────────────────────────
-def run_agent(messages: list, api_key: str) -> tuple[str, list]:
+def run_agent(
+    messages: list,
+    api_key: str,
+    response_placeholder=None,
+) -> tuple[str, list]:
     """
     Run the Claude agentic loop.
     Returns (final_text, tool_calls_log).
+
+    If response_placeholder (a st.empty()) is provided, streams text into it
+    progressively as Claude generates it. Retries up to 3 times on rate-limit
+    errors with exponential backoff (1s, 2s, 4s).
     """
     client     = get_anthropic_client(api_key)
     tool_calls = []
     loop_msgs  = list(messages)
+    all_text   = ""
 
     while True:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=loop_msgs,
-        )
+        # ── API call with rate-limit retry ────────────────────────────────────
+        last_exc = None
+        response = None
 
+        for attempt in range(4):
+            try:
+                if response_placeholder is not None:
+                    # Streaming mode
+                    turn_text = ""
+                    with client.messages.stream(
+                        model=MODEL,
+                        max_tokens=4096,
+                        system=SYSTEM_PROMPT,
+                        tools=TOOLS,
+                        messages=loop_msgs,
+                    ) as stream:
+                        for chunk in stream.text_stream:
+                            turn_text += chunk
+                            response_placeholder.markdown(all_text + turn_text + "▌")
+                        response = stream.get_final_message()
+                    if turn_text:
+                        all_text += turn_text
+                        response_placeholder.markdown(all_text)
+                else:
+                    response = client.messages.create(
+                        model=MODEL,
+                        max_tokens=4096,
+                        system=SYSTEM_PROMPT,
+                        tools=TOOLS,
+                        messages=loop_msgs,
+                    )
+                break  # success
+
+            except anthropic.RateLimitError as e:
+                last_exc = e
+                if attempt < 3:
+                    wait = 2 ** attempt  # 1, 2, 4 seconds
+                    if response_placeholder is not None:
+                        response_placeholder.markdown(
+                            f"_Rate limited — retrying in {wait}s…_"
+                        )
+                    time.sleep(wait)
+
+            except Exception as e:
+                st.error(f"Claude API error: {e}")
+                return all_text or "", tool_calls
+        else:
+            st.error("Rate limit exceeded after retries. Please try again shortly.")
+            return all_text or "", tool_calls
+
+        # ── Process response ──────────────────────────────────────────────────
         assistant_content = response.content
         loop_msgs.append({"role": "assistant", "content": assistant_content})
 
         if response.stop_reason == "end_turn":
-            final_text = " ".join(
-                block.text for block in assistant_content
-                if hasattr(block, "text")
-            )
-            return final_text, tool_calls
+            if not all_text:
+                # Non-streaming path: extract text from blocks
+                final_text = " ".join(
+                    block.text for block in assistant_content
+                    if hasattr(block, "text")
+                )
+                if response_placeholder is not None:
+                    response_placeholder.markdown(final_text)
+                return final_text, tool_calls
+            return all_text, tool_calls
 
         if response.stop_reason == "tool_use":
+            if response_placeholder is not None and not all_text:
+                response_placeholder.markdown("_Using tools…_")
+
             tool_results = []
             for block in assistant_content:
                 if block.type != "tool_use":
                     continue
-
                 result_str = execute_tool(block.name, block.input)
-
                 preview = result_str[:500] + "…" if len(result_str) > 500 else result_str
                 tool_calls.append({
                     "name":   block.name,
                     "inputs": block.input,
                     "result": preview,
                 })
-
                 tool_results.append({
                     "type":        "tool_result",
                     "tool_use_id": block.id,
                     "content":     result_str,
                 })
 
+            # Clear "Using tools…" so streamed text can take over on next turn
+            if response_placeholder is not None:
+                response_placeholder.markdown(all_text or "")
+
             loop_msgs.append({"role": "user", "content": tool_results})
             continue
 
         # Unexpected stop reason
-        final_text = " ".join(
-            block.text for block in assistant_content
-            if hasattr(block, "text")
+        fallback = " ".join(
+            block.text for block in assistant_content if hasattr(block, "text")
         )
-        return final_text, tool_calls
+        return all_text or fallback, tool_calls
 
 
 # ── Streamlit UI ──────────────────────────────────────────────────────────────
@@ -367,6 +426,28 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.pending_input = None
         st.rerun()
+
+    if st.session_state.get("messages"):
+        lines = []
+        for m in st.session_state.messages:
+            if m["role"] == "user":
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        b["text"] for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                lines.append(f"**You:** {content}")
+            else:
+                lines.append(f"**Assistant:** {m.get('text', '')}")
+        md = "\n\n".join(lines)
+        st.download_button(
+            label="⬇ Download chat",
+            data=md,
+            file_name="conversation.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 
     if st.session_state.get("refresh_in_progress"):
         st.info("Database refresh running in background…")
@@ -438,13 +519,10 @@ if user_input:
     _conn = get_db_connection()
     save_message(_conn, st.session_state.session_id, "user", user_input)
 
-    # Run agent
-    with st.spinner("Thinking…"):
-        final_text, tool_calls = run_agent(api_messages, _api_key)
-
-    # Show assistant response
+    # Run agent with streaming
     with st.chat_message("assistant"):
-        st.markdown(final_text)
+        response_placeholder = st.empty()
+        final_text, tool_calls = run_agent(api_messages, _api_key, response_placeholder)
         if tool_calls:
             with st.expander(f"Tool calls ({len(tool_calls)})"):
                 for tc in tool_calls:

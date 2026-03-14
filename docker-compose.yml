@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # Persist the SQLite DB and ChromaDB across restarts
+      - ./yc_companies.db:/app/yc_companies.db
+      - ./chroma_db:/app/chroma_db
+      # Cache the sentence-transformer model between rebuilds
+      - hf_cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+volumes:
+  hf_cache:

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install linters
+        run: pip install ruff mypy
+
+      - name: Lint (ruff)
+        run: |
+          ruff check \
+            --select E,F,W \
+            --ignore E501,E402 \
+            .
+
+      - name: Type check (mypy)
+        run: |
+          mypy \
+            --ignore-missing-imports \
+            --no-strict-optional \
+            chat.py utils.py research_agents.py
