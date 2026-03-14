@@ -414,14 +414,16 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("Clear conversation", use_container_width=True):
+    clear_btn = st.button("🗑 Clear conversation", use_container_width=True)
+    if clear_btn:
         _conn = get_db_connection()
         delete_session(_conn, st.session_state.session_id)
         st.session_state.messages = []
         st.session_state.pending_input = None
         st.rerun()
 
-    if st.button("New session", use_container_width=True):
+    new_btn = st.button("✨ New session", use_container_width=True)
+    if new_btn:
         st.session_state.session_id = str(uuid.uuid4())
         st.session_state.messages = []
         st.session_state.pending_input = None
@@ -459,28 +461,44 @@ with st.sidebar:
     )
 
 # ── Main chat area ────────────────────────────────────────────────────────────
+# Constrain width for readability (wide layout still allows sidebar + content)
+st.markdown(
+    """
+    <style>
+    .block-container { max-width: 52rem; padding-top: 1.5rem; padding-bottom: 2rem; }
+    [data-testid="stChatMessage"] { padding: 1rem 0; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.header("YC Companies Explorer")
+st.caption("Ask about companies, batches, industries, or trends. I’ll use search and SQL as needed.")
 
 # Render history
 for msg in st.session_state.messages:
     role = msg["role"]
     with st.chat_message(role):
         if role == "assistant":
-            st.markdown(msg["text"])
+            text = msg.get("text") or ""
+            if text:
+                st.markdown(text)
             if msg.get("tool_calls"):
-                with st.expander(f"Tool calls ({len(msg['tool_calls'])})"):
+                with st.expander(f"🔧 Tool calls ({len(msg['tool_calls'])})", expanded=False):
                     for tc in msg["tool_calls"]:
                         st.markdown(f"**`{tc['name']}`**")
                         st.json(tc["inputs"])
-                        st.text(tc["result"])
+                        result_preview = (tc.get("result") or "")[:1500]
+                        if len((tc.get("result") or "")) > 1500:
+                            result_preview += "…"
+                        st.text(result_preview)
         else:
             content = msg.get("content", "")
             if isinstance(content, str):
-                st.markdown(content)
+                st.markdown(content or "_Message_")
             else:
-                for block in content:
+                for block in (content or []):
                     if isinstance(block, dict) and block.get("type") == "text":
-                        st.markdown(block["text"])
+                        st.markdown(block.get("text") or "_Message_")
 
 # Determine user input
 user_input = st.chat_input("Ask anything about YC companies…")
@@ -490,11 +508,11 @@ if st.session_state.pending_input and not user_input:
     st.session_state.pending_input = None
 
 if not _api_key:
-    st.error("ANTHROPIC_API_KEY not found. Add it to your .env file.")
+    st.error(
+        "**ANTHROPIC_API_KEY** not set. Copy `.env.example` to `.env` and add your key. "
+        "Get one at [console.anthropic.com](https://console.anthropic.com/)."
+    )
     st.stop()
-
-if user_input and not _api_key:
-    user_input = None
 
 if user_input:
     # Show user message
@@ -524,11 +542,14 @@ if user_input:
         response_placeholder = st.empty()
         final_text, tool_calls = run_agent(api_messages, _api_key, response_placeholder)
         if tool_calls:
-            with st.expander(f"Tool calls ({len(tool_calls)})"):
+            with st.expander(f"🔧 Tool calls ({len(tool_calls)})", expanded=False):
                 for tc in tool_calls:
                     st.markdown(f"**`{tc['name']}`**")
                     st.json(tc["inputs"])
-                    st.text(tc["result"])
+                    result_preview = (tc.get("result") or "")[:1500]
+                    if len((tc.get("result") or "")) > 1500:
+                        result_preview += "…"
+                    st.text(result_preview)
 
     # Store and persist assistant turn
     st.session_state.messages.append({
