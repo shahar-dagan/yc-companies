@@ -134,7 +134,8 @@ for i, (b, v) in enumerate(zip(batch_order[-6:], batch_counts.values[-6:])):
 batch_x(ax, batch_order, step=2)
 ax.set_ylabel("Companies")
 ax.set_title("YC Companies per Batch")
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "1_companies_per_batch.png")
 
@@ -157,8 +158,11 @@ wedges, texts, autotexts = ax.pie(
     wedgeprops=dict(width=0.55, edgecolor=COLORS["bg"]),
     pctdistance=0.78,
 )
-for t in texts: t.set_color(COLORS["text"])
-for t in autotexts: t.set_color(COLORS["bg"]); t.set_fontsize(9)
+for t in texts:
+    t.set_color(COLORS["text"])
+for t in autotexts:
+    t.set_color(COLORS["bg"])
+    t.set_fontsize(9)
 ax.set_title("Company Status Distribution")
 save(fig, "2_status_breakdown.png")
 
@@ -171,7 +175,8 @@ ind_counts = df["industry"].value_counts().drop("Unknown", errors="ignore").head
 
 fig, ax = plt.subplots(figsize=(10, 6))
 bars = ax.barh(ind_counts.index[::-1], ind_counts.values[::-1], color=COLORS["primary"], alpha=0.85)
-ax.xaxis.grid(True); ax.set_axisbelow(True)
+ax.xaxis.grid(True)
+ax.set_axisbelow(True)
 for bar in bars:
     w = bar.get_width()
     ax.text(w + 3, bar.get_y() + bar.get_height() / 2, str(int(w)), va="center", fontsize=8)
@@ -206,7 +211,8 @@ ax.set_ylabel("Companies (3-batch rolling avg)")
 ax.set_title("Industry Composition Over Time (Top 8 Industries, stacked)")
 ax.legend(loc="upper left", fontsize=8, framealpha=0.3,
           facecolor=COLORS["panel"], edgecolor=COLORS["grid"])
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "4_industry_trends.png")
 
@@ -223,7 +229,8 @@ top_tags = pd.Series(dict(all_tags.most_common(30)))
 
 fig, ax = plt.subplots(figsize=(12, 8))
 bars = ax.barh(top_tags.index[::-1], top_tags.values[::-1], color=COLORS["blue"], alpha=0.85)
-ax.xaxis.grid(True); ax.set_axisbelow(True)
+ax.xaxis.grid(True)
+ax.set_axisbelow(True)
 for bar in bars:
     w = bar.get_width()
     ax.text(w + 2, bar.get_y() + bar.get_height() / 2, str(int(w)), va="center", fontsize=8)
@@ -255,7 +262,8 @@ batch_x(ax, batch_order, step=2)
 ax.set_ylabel("Employees")
 ax.set_title("Team Size per Batch (Median & Mean)")
 ax.legend(fontsize=9, framealpha=0.3)
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "6_team_size_trends.png")
 
@@ -282,7 +290,8 @@ batch_x(ax, batch_order, step=2)
 ax.set_ylabel("% Companies Hiring")
 ax.set_title("Hiring Rate per Batch")
 ax.legend(fontsize=9, framealpha=0.3)
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "7_hiring_rate.png")
 
@@ -305,7 +314,8 @@ ax.set_xlim(-1, len(batch_order))
 batch_x(ax, batch_order, step=2)
 ax.set_ylabel("% Flagged as Top Company")
 ax.set_title("YC 'Top Company' Flag Rate per Batch")
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "8_top_company_rate.png")
 
@@ -323,7 +333,8 @@ country_counts = (df["country"]
 fig, ax = plt.subplots(figsize=(10, 7))
 bars = ax.barh(country_counts.index[::-1], country_counts.values[::-1],
                color=COLORS["purple"], alpha=0.85)
-ax.xaxis.grid(True); ax.set_axisbelow(True)
+ax.xaxis.grid(True)
+ax.set_axisbelow(True)
 for bar in bars:
     w = bar.get_width()
     ax.text(w + 3, bar.get_y() + bar.get_height() / 2, str(int(w)), va="center", fontsize=8)
@@ -349,8 +360,10 @@ hm_pct = hm.div(hm.sum(axis=1), axis=0) * 100
 
 fig, ax = plt.subplots(figsize=(9, 7))
 im = ax.imshow(hm_pct.values, aspect="auto", cmap="YlOrRd", vmin=0, vmax=100)
-ax.set_xticks(range(len(key_statuses))); ax.set_xticklabels(key_statuses)
-ax.set_yticks(range(len(hm_pct.index))); ax.set_yticklabels(hm_pct.index, fontsize=9)
+ax.set_xticks(range(len(key_statuses)))
+ax.set_xticklabels(key_statuses)
+ax.set_yticks(range(len(hm_pct.index)))
+ax.set_yticklabels(hm_pct.index, fontsize=9)
 for i in range(len(hm_pct.index)):
     for j in range(len(key_statuses)):
         v = hm_pct.values[i, j]
@@ -393,7 +406,8 @@ batch_x(ax, batch_order, step=2)
 ax.set_ylabel("Companies (3-batch rolling avg)")
 ax.set_title("B2B vs B2C Tag Count Over Time")
 ax.legend(fontsize=10, framealpha=0.3)
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "11_b2b_vs_b2c.png")
 
@@ -417,7 +431,8 @@ ax.set_xlim(-1, len(batch_order))
 batch_x(ax, batch_order, step=2)
 ax.set_ylabel("% Nonprofit")
 ax.set_title("Nonprofit Rate per Batch")
-ax.yaxis.grid(True); ax.set_axisbelow(True)
+ax.yaxis.grid(True)
+ax.set_axisbelow(True)
 fig.tight_layout()
 save(fig, "12_nonprofit_rate.png")
 
